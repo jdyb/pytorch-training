@@ -1,5 +1,5 @@
 #!/bin/bash
-. /setup-torch.sh
-MASTER_ADDR=10.161.10.10
+. ./setup-pytorch.sh
+MASTER_ADDR=gish
 MASTER_PORT=12355
 ./fsdp-tutorial.py
