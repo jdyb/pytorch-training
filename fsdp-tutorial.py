@@ -5,6 +5,7 @@
 import os
 import argparse
 import functools
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,10 +30,12 @@ from torch.distributed.fsdp.wrap import (
 )
 
 def setup(rank, world_size):
+    logging.info('Setup rank=%s world_size=%s', rank, world_size)
+    logging.info('environ: %s', os.environ)
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
 
-    # initialize the process group
+    logging.info('initialize the process group')
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
 
 def cleanup():
@@ -107,17 +110,23 @@ def test(model, rank, world_size, test_loader):
 def fsdp_main(rank, world_size, args):
     setup(rank, world_size)
 
+    logging.info("Compose")
     transform=transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,))
     ])
 
+    logging.info("Create dataset1")
     dataset1 = datasets.MNIST('../data', train=True, download=True,
                         transform=transform)
+    logging.info("Create dataset2")
     dataset2 = datasets.MNIST('../data', train=False,
                         transform=transform)
 
+
+    logging.info("Create sampler1")
     sampler1 = DistributedSampler(dataset1, rank=rank, num_replicas=world_size, shuffle=True)
+    logging.info("Create sampler2")
     sampler2 = DistributedSampler(dataset2, rank=rank, num_replicas=world_size)
 
     train_kwargs = {'batch_size': args.batch_size, 'sampler': sampler1}
@@ -128,7 +137,9 @@ def fsdp_main(rank, world_size, args):
     train_kwargs.update(cuda_kwargs)
     test_kwargs.update(cuda_kwargs)
 
+    logging.info("Create train_loader")
     train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
+    logging.info("Create t rest_loader")
     test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
     my_auto_wrap_policy = functools.partial(
         size_based_auto_wrap_policy, min_num_params=100
@@ -147,10 +158,13 @@ def fsdp_main(rank, world_size, args):
 
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     init_start_event.record()
+    logging.info("Start training loop")
     for epoch in range(1, args.epochs + 1):
+        logging.info("Training epoch %s", epoch)
         train(args, model, rank, world_size, train_loader, optimizer, epoch, sampler=sampler1)
         test(model, rank, world_size, test_loader)
         scheduler.step()
+    logging.info("Training loop finished")
 
     init_end_event.record()
 
@@ -188,9 +202,14 @@ if __name__ == '__main__':
                         help='For Saving the current Model')
     args = parser.parse_args()
 
+    logging.basicConfig(level = logging.INFO)
+    logging.info("Seed")
+
     torch.manual_seed(args.seed)
 
     WORLD_SIZE = torch.cuda.device_count()
+    logging.info("world_size %s", WORLD_SIZE) 
+    logging.info("spawn")
     mp.spawn(fsdp_main,
         args=(WORLD_SIZE, args),
         nprocs=WORLD_SIZE,
